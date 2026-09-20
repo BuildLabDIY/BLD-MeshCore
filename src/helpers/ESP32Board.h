@@ -198,10 +198,17 @@ public:
 };
 
 class ESP32RTCClock : public mesh::RTCClock {
+  bool time_was_set = false;
 public:
   ESP32RTCClock() { }
+  bool isTimeReliable() const override { return time_was_set; }
   void begin() {
     esp_reset_reason_t reason = esp_reset_reason();
+    if (reason != ESP_RST_POWERON) {
+      // Any reset other than a cold boot keeps the RTC domain alive, so the
+      // time carried over is as good as it was before.
+      time_was_set = true;
+    }
     if (reason == ESP_RST_POWERON) {
       // start with some date/time in the recent past
       struct timeval tv;
@@ -220,6 +227,7 @@ public:
     tv.tv_sec = time;
     tv.tv_usec = 0;
     settimeofday(&tv, NULL);
+    time_was_set = true;
   }
 };
 

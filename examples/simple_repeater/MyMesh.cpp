@@ -651,6 +651,17 @@ void MyMesh::onAdvertRecv(mesh::Packet *packet, const mesh::Identity &id, uint32
                           const uint8_t *app_data, size_t app_data_len) {
   mesh::Mesh::onAdvertRecv(packet, id, timestamp, app_data, app_data_len); // chain to super impl
 
+  {   // let the mesh agree on a wall clock, for nodes with no RTC chip
+    uint32_t pub_hash;
+    memcpy(&pub_hash, id.pub_key, 4);
+    if (_ts.feedAdvert(timestamp, pub_hash)) {
+      if (_ts.trySync(getRTCClock(), &sensors, false) != TsSyncResult::NONE) {
+        _ts_restored_from_flash = false;   // now backed by a real quorum
+        saveClockToFile();
+      }
+    }
+  }
+
   // if this a zero hop advert (and not via 'Share'), add it to neighbours
   if (packet->getPathHashCount() == 0 && !isShare(packet)) {
     AdvertDataParser parser(app_data, app_data_len);
@@ -940,11 +951,92 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   memset(default_scope.key, 0, sizeof(default_scope.key));
 }
 
+#define CLOCK_FILE           "/clock"
+#define CLOCK_SAVE_INTERVAL  21600000   // 6 hours -- flash is only the backstop
+static const uint32_t CLK_MIN_VALID = 1577836800; // 2020-01-01 UTC
+static const uint32_t CLK_MAX_VALID = 2524608000; // 2050-01-01 UTC
+
+#if defined(ESP32)
+// Survives esp_restart()/watchdog (but not a power cycle) at no flash cost.
+#include <esp_attr.h>
+#define CLOCK_RTCMEM_MAGIC 0x434c4b31u   // "CLK1"
+static RTC_NOINIT_ATTR uint32_t rtcmem_magic;
+static RTC_NOINIT_ATTR uint32_t rtcmem_time;
+#endif
+
+// A node with no RTC chip starts every boot from a placeholder date. Keeping
+// the clock across reboots stops an unattended repeater coming back up years
+// in the past, and a restored value is held apart until a quorum confirms it.
+void MyMesh::restoreClockFromFile() {
+  uint32_t saved = 0;
+
+#if defined(ESP32)
+  if (rtcmem_magic == CLOCK_RTCMEM_MAGIC) saved = rtcmem_time;
+#endif
+
+  if (_fs->exists(CLOCK_FILE)) {
+#if defined(RP2040_PLATFORM)
+    File f = _fs->open(CLOCK_FILE, "r");
+#else
+    File f = _fs->open(CLOCK_FILE);
+#endif
+    if (f) {
+      uint32_t from_file = 0;
+      if (f.read((uint8_t *)&from_file, sizeof(from_file)) == sizeof(from_file)
+          && from_file > saved) {
+        saved = from_file;
+      }
+      f.close();
+    }
+  }
+  if (saved == 0) return;
+
+  if (saved > CLK_MIN_VALID && saved < CLK_MAX_VALID && saved > getRTCClock()->getCurrentTime()) {
+    getRTCClock()->setCurrentTime(saved);
+    _ts_restored_from_flash = true;
+    _ts_restore_base = saved;
+    _ts_restore_millis = millis();
+    MESH_DEBUG_PRINTLN("Clock restored from storage: %u", (unsigned)saved);
+  }
+}
+
+void MyMesh::checkpointClock() {
+#if defined(ESP32)
+  if (!getRTCClock()->isTimeReliable() || _ts_restored_from_flash) return;
+  uint32_t now = getRTCClock()->getCurrentTime();
+  if (now > CLK_MIN_VALID && now < CLK_MAX_VALID) {
+    rtcmem_time = now;
+    rtcmem_magic = CLOCK_RTCMEM_MAGIC;
+  }
+#endif
+}
+
+void MyMesh::saveClockToFile() {
+  if (!getRTCClock()->isTimeReliable() || _ts_restored_from_flash) return;
+  uint32_t now = getRTCClock()->getCurrentTime();
+  if (now <= CLK_MIN_VALID || now >= CLK_MAX_VALID) return;
+
+  checkpointClock();
+
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+  _fs->remove(CLOCK_FILE);
+  File f = _fs->open(CLOCK_FILE, FILE_O_WRITE);
+#elif defined(RP2040_PLATFORM)
+  File f = _fs->open(CLOCK_FILE, "w");
+#else
+  File f = _fs->open(CLOCK_FILE, "w", true);
+#endif
+  if (!f) return;
+  f.write((const uint8_t *)&now, sizeof(now));
+  f.close();
+}
+
 void MyMesh::begin(FILESYSTEM *fs) {
   mesh::Mesh::begin();
   _fs = fs;
   // load persisted prefs
   _cli.loadPrefs(_fs);
+  restoreClockFromFile();
   acl.load(_fs, self_id);
   // TODO: key_store.begin();
   region_map.load(_fs);
@@ -1279,6 +1371,8 @@ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply
       sendNodeDiscoverReq();
       strcpy(reply, "OK - Discover sent");
     }
+  } else if (memcmp(command, "timesync", 8) == 0) {
+    _ts.buildReply(reply, getRTCClock());
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
@@ -1290,6 +1384,35 @@ void MyMesh::loop() {
 #endif
 
   mesh::Mesh::loop();
+
+  // Frequent, wear-free checkpoint into RTC memory; flash is the rare backstop
+  // for a power cycle.
+  if (_time_chk_at == 0) {
+    _time_chk_at = futureMillis(60000);
+  } else if (millisHasNowPassed(_time_chk_at)) {
+    // A restored clock only ticks forward with uptime; if it moved more than
+    // that, something set it (CLI, app, GPS) and it may be persisted again.
+    if (_ts_restored_from_flash) {
+      uint32_t expected = _ts_restore_base + (uint32_t)((millis() - _ts_restore_millis) / 1000);
+      uint32_t t = getRTCClock()->getCurrentTime();
+      uint32_t diff = (t > expected) ? t - expected : expected - t;
+      if (diff > 120) _ts_restored_from_flash = false;
+    }
+    checkpointClock();
+    if (!_clock_persisted && getRTCClock()->isTimeReliable() && !_ts_restored_from_flash) {
+      saveClockToFile();
+      _clock_persisted = true;
+    }
+    _time_chk_at = futureMillis(60000);
+  }
+
+  if (_time_save_at == 0) {
+    _time_save_at = futureMillis(CLOCK_SAVE_INTERVAL);
+  } else if (millisHasNowPassed(_time_save_at)) {
+    saveClockToFile();
+    _time_save_at = futureMillis(CLOCK_SAVE_INTERVAL);
+  }
+
 
   if (next_flood_advert && millisHasNowPassed(next_flood_advert)) {
     mesh::Packet *pkt = createSelfAdvert();

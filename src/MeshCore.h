@@ -101,6 +101,13 @@ public:
   virtual void setCurrentTime(uint32_t time) = 0;
 
   /**
+   * Returns true if the clock has been set from a reliable source
+   * (hardware RTC chip, GPS fix, CLI, or an agreed timestamp). Default false:
+   * a volatile clock holding only a build-time placeholder is not reliable.
+   */
+  virtual bool isTimeReliable() const { return false; }
+
+  /**
    * override in classes that need to periodically update internal state
    */
   virtual void tick() { /* no op */}

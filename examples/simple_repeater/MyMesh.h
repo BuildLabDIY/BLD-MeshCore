@@ -24,6 +24,7 @@
 #define WITH_BRIDGE
 #endif
 
+#include <helpers/TimeSyncHelper.h>
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/ClientACL.h>
@@ -108,6 +109,17 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   NeighbourInfo neighbours[MAX_NEIGHBOURS];
 #endif
   CayenneLPP telemetry;
+  TimeSyncHelper _ts;              // clock agreement from advert timestamps
+  uint32_t _time_save_at = 0;      // millis() of next flash save (0 = not scheduled)
+  uint32_t _time_chk_at  = 0;      // millis() of next RTC-memory checkpoint
+  bool     _ts_restored_from_flash = false;  // clock came from storage, not from a sync
+  bool     _clock_persisted = false;         // a confirmed time has been written to flash
+  uint32_t _ts_restore_base = 0;             // value restored from storage
+  unsigned long _ts_restore_millis = 0;      // millis() when it was restored
+
+  void restoreClockFromFile();
+  void saveClockToFile();
+  void checkpointClock();
   unsigned long set_radio_at, revert_radio_at;
   float pending_freq;
   float pending_bw;
