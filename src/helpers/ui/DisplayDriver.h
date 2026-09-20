@@ -15,6 +15,10 @@ class DisplayDriver {
   int _w, _h;
 protected:
   DisplayDriver(int w, int h) { _w = w; _h = h; }
+#ifdef CYRILLIC_SUPPORT
+  uint8_t _font_size = 1;   // current text size; used for baseline offset
+  int _cursor_y_raw = 0;    // logical y before GFXfont baseline shift
+#endif
 public:
   //enum Color { DARK=0, LIGHT, RED, GREEN, BLUE, YELLOW, ORANGE }; // on b/w screen, colors will be !=0 synonym of light
 

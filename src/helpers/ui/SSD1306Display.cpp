@@ -72,6 +72,9 @@ void SSD1306Display::startFrame(ColorVal bkg) {
 }
 
 void SSD1306Display::setTextSize(int sz) {
+#ifdef CYRILLIC_SUPPORT
+  _font_size = sz;
+#endif
   display.setTextSize(sz);
 }
 
@@ -81,7 +84,14 @@ void SSD1306Display::setColor(ColorVal c) {
 }
 
 void SSD1306Display::setCursor(int x, int y) {
+#ifdef CYRILLIC_SUPPORT
+  _cursor_y_raw = y;
+  // A GFXfont positions the cursor at the text baseline, so shift down to keep
+  // the top-left semantics that callers expect.
+  display.setCursor(x, y + (_font_size * 7));
+#else
   display.setCursor(x, y);
+#endif
 }
 
 void SSD1306Display::print(const char* str) {
