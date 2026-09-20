@@ -351,6 +351,14 @@ void MyMesh::onContactsFull() {
 }
 
 void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) {
+  {   // let the mesh agree on a wall clock, for nodes with no RTC chip
+    uint32_t pub_hash;
+    memcpy(&pub_hash, contact.id.pub_key, 4);
+    if (_ts.feedAdvert(contact.last_advert_timestamp, pub_hash)) {
+      _ts.trySync(getRTCClock(), &sensors, false);
+    }
+  }
+
   if (_serial->isConnected()) {
     if (is_new) {
       writeContactRespFrame(PUSH_CODE_NEW_ADVERT, contact);

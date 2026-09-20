@@ -69,6 +69,7 @@
 
 #include <helpers/BaseChatMesh.h>
 #include <helpers/TransportKeyStore.h>
+#include <helpers/TimeSyncHelper.h>
 
 /* -------------------------------------------------------------------------------------- */
 
@@ -186,6 +187,8 @@ public:
   bool hasPendingWork() const;
 
 private:
+  TimeSyncHelper _ts;   // clock agreement from advert timestamps
+
   void writeOKFrame();
   void writeErrFrame(uint8_t err_code);
   void writeDisabledFrame();
