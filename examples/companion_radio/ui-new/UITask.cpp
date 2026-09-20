@@ -582,6 +582,11 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _sensors = sensors;
   _auto_off = millis() + AUTO_OFF_MILLIS;
 
+#ifdef DISPLAY_TZ
+  setenv("TZ", DISPLAY_TZ, 1);
+  tzset();
+#endif
+
 #if defined(PIN_USER_BTN)
   user_btn.begin();
 #endif

@@ -59,9 +59,31 @@ public:
       if (c >= 32 && c <= 126) {
         dest[j++] = c;  // ASCII printable
       } else if (c >= 0x80) {
+#ifdef CYRILLIC_SUPPORT
+        // Map Cyrillic UTF-8 (U+0400..U+04FF) to the CP1251 code points used by
+        // the RU font; anything else non-ASCII becomes a placeholder.
+        unsigned char c2 = (unsigned char)src[i+1];
+        if (c == 0xD0 && c2 >= 0x90 && c2 <= 0xBF) {
+          dest[j++] = (char)(c2 + 0x30);
+          i++;
+        } else if (c == 0xD1 && c2 >= 0x80 && c2 <= 0x8F) {
+          dest[j++] = (char)(c2 + 0x70);
+          i++;
+        } else if (c == 0xD0 && c2 == 0x81) {
+          dest[j++] = (char)0xA8;
+          i++;
+        } else if (c == 0xD1 && c2 == 0x91) {
+          dest[j++] = (char)0xB8;
+          i++;
+        } else {
+          dest[j++] = (char)0xAE;
+          while (src[i+1] && (src[i+1] & 0xC0) == 0x80) i++;
+        }
+#else
         dest[j++] = '\xDB';  // CP437 full block █
         while (src[i+1] && (src[i+1] & 0xC0) == 0x80) 
           i++;  // skip UTF-8 continuation bytes
+#endif
       }
     }
     dest[j] = 0;
